@@ -1,0 +1,33 @@
+{
+  "name": "pharos-agent",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Companion control-center agent for PHAROS: governed retrieval, cited briefs, auditable tool calls.",
+  "scripts": {
+    "dev": "next dev -H 127.0.0.1",
+    "build": "next build",
+    "start": "next start -H 127.0.0.1",
+    "db:migrate": "prisma migrate dev",
+    "db:extensions": "psql \"$DATABASE_URL\" -f db/extensions.sql",
+    "db:seed": "tsx scripts/seed.ts",
+    "ingest": "tsx scripts/ingest.ts",
+    "brief": "tsx scripts/brief-cli.ts"
+  },
+  "prisma": {
+    "seed": "tsx scripts/seed.ts"
+  },
+  "dependencies": {
+    "@prisma/client": "^6.7.0",
+    "next": "^15.3.2",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.0",
+    "@types/react": "^19.1.0",
+    "@types/react-dom": "^19.1.0",
+    "prisma": "^6.7.0",
+    "tsx": "^4.19.4",
+    "typescript": "^5.8.3"
+  }
+}

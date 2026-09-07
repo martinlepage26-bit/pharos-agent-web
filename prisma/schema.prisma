@@ -1,0 +1,143 @@
+// PHAROS-AGENT v1 schema
+// Governance-first: every run, tool call, and memory item is inspectable.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Project {
+  id          String   @id @default(cuid())
+  key         String   @unique // e.g. "pharos"
+  name        String
+  description String?
+  createdAt   DateTime @default(now())
+  sources     Source[]
+  memoryItems MemoryItem[]
+}
+
+model Source {
+  id           String   @id @default(cuid())
+  projectId    String
+  project      Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  kind         String // "local_folder" | "github_repo" | "calendar" | "manual"
+  label        String
+  rootPath     String? // absolute path for local_folder sources
+  repoFullName String? // owner/name for github_repo sources
+  enabled      Boolean  @default(true)
+  documents    Document[]
+
+  @@index([projectId])
+}
+
+model Document {
+  id          String   @id @default(cuid())
+  sourceId    String
+  source      Source   @relation(fields: [sourceId], references: [id], onDelete: Cascade)
+  path        String // path relative to the source root
+  title       String?
+  contentHash String
+  ingestedAt  DateTime @default(now())
+  chunks      Chunk[]
+
+  @@unique([sourceId, path])
+}
+
+model Chunk {
+  id         String   @id @default(cuid())
+  documentId String
+  document   Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  ordinal    Int
+  heading    String?
+  content    String
+  createdAt  DateTime @default(now())
+
+  @@index([documentId])
+}
+
+model AgentRun {
+  id         String      @id @default(cuid())
+  goal       String
+  status     String      @default("running") // running | completed | failed
+  model      String?
+  language   String      @default("fr-CA")
+  startedAt  DateTime    @default(now())
+  finishedAt DateTime?
+  toolCalls  ToolCall[]
+  briefs     BriefDraft[]
+  audits     AuditEvent[]
+}
+
+model ToolCall {
+  id            String   @id @default(cuid())
+  runId         String
+  run           AgentRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+  toolName      String
+  capability    String
+  purpose       String
+  status        String // success | denied | failed | not_configured
+  inputJson     String
+  outputSummary String?
+  createdAt     DateTime @default(now())
+
+  @@index([runId])
+}
+
+model AuditEvent {
+  id         String   @id @default(cuid())
+  runId      String?
+  run        AgentRun? @relation(fields: [runId], references: [id], onDelete: SetNull)
+  eventType  String
+  actor      String // user | agent | system
+  toolName   String?
+  capability String?
+  resourceRef String?
+  purpose    String?
+  outcome    String? // success | denied | failed
+  occurredAt DateTime @default(now())
+
+  @@index([runId])
+  @@index([occurredAt])
+}
+
+model CapabilityGrant {
+  id             String    @id @default(cuid())
+  subject        String    @default("personal-agent")
+  capability     String // documents.search | github.read | calendar.read | drafts.write
+  resourceScopeJson String  @default("{}") // { projectIds?: string[], repositoryIds?: string[], allowedPaths?: string[] }
+  approvalMode   String    @default("preapproved") // preapproved | per_action
+  enabled        Boolean   @default(true)
+  expiresAt      DateTime?
+  createdAt      DateTime  @default(now())
+
+  @@unique([subject, capability])
+}
+
+model MemoryItem {
+  id         String   @id @default(cuid())
+  projectId  String?
+  project    Project? @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  kind       String // profile | project
+  category   String? // decision | requirement | architecture | risk | milestone | preference
+  statement  String
+  sourceRefs String   @default("[]") // JSON array of source references
+  confidence String   @default("confirmed") // confirmed | inferred | needs_review
+  sensitivity String  @default("internal")
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+}
+
+model BriefDraft {
+  id          String   @id @default(cuid())
+  runId       String
+  run         AgentRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+  language    String // fr-CA | en-CA | bilingual
+  content     String
+  filePath    String
+  contentHash String
+  createdAt   DateTime @default(now())
+}

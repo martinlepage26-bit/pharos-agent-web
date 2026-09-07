@@ -1,0 +1,38 @@
+# --- dependencies & build output ---
+node_modules/
+.next/
+out/
+tsconfig.tsbuildinfo
+
+# --- secrets & local config ---
+.env
+ca.pharos.agent.plist
+.claude/settings.local.json
+
+# --- live PostgreSQL cluster (DO NOT `git clean -xdf`: this is the database) ---
+pgdata/
+pgsock/
+
+# --- vendored PostgreSQL 17 + pgAdmin install (~922 MB) ---
+pg/
+
+# --- vendored Python venv for the voice service (~1.8 GB) ---
+# server.py and ref.wav ARE tracked; everything generated is not.
+pharos-voice/.venv/
+pharos-voice/logs/
+pharos-voice/setup.log
+pharos-voice/*.wav
+!pharos-voice/ref.wav
+
+# --- stale snapshots superseded by this repo (~619 MB) ---
+pharos-agent.archive-20260904/
+pharos-agent.tar.gz
+
+# --- runtime output & logs ---
+drafts/
+logs/
+*.log
+setup.status
+
+# --- macOS noise ---
+.DS_Store
