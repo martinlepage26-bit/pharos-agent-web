@@ -6,7 +6,18 @@ import type { GithubActivityOutput } from "../tools/getGithubProjectActivity";
 import type { CalendarAgendaOutput } from "../tools/getCalendarAgenda";
 import { MODEL, synthesize } from "./models";
 
-export type BriefLanguage = "fr-CA" | "en-CA" | "bilingual";
+/**
+ * The single source of truth for accepted languages. Both entry points —
+ * the HTTP route and the CLI — validate against this at runtime; a
+ * TypeScript cast alone is erased and does not constrain argv.
+ */
+export const BRIEF_LANGUAGES = ["fr-CA", "en-CA", "bilingual"] as const;
+
+export type BriefLanguage = (typeof BRIEF_LANGUAGES)[number];
+
+export function isBriefLanguage(value: string): value is BriefLanguage {
+  return (BRIEF_LANGUAGES as readonly string[]).includes(value);
+}
 
 export type BriefRequest = {
   projectKey: string;

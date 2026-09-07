@@ -2,7 +2,11 @@
  * CLI entry point for the brief workflow:
  *   npm run brief -- --project pharos --language fr-CA
  */
-import { runBriefWorkflow } from "../src/lib/brief";
+import {
+  runBriefWorkflow,
+  isBriefLanguage,
+  BRIEF_LANGUAGES,
+} from "../src/lib/brief";
 import { PrismaClient } from "@prisma/client";
 
 const prisma = new PrismaClient();
@@ -15,7 +19,16 @@ function arg(name: string, fallback?: string): string | undefined {
 
 async function main() {
   const projectKey = arg("project", "pharos")!;
-  const language = (arg("language", "fr-CA") as "fr-CA" | "en-CA" | "bilingual")!;
+
+  // Validate at runtime: a cast is erased, and this value reaches a filename.
+  const languageArg = arg("language", "fr-CA")!;
+  if (!isBriefLanguage(languageArg)) {
+    console.error(
+      `Invalid --language "${languageArg}". Expected one of: ${BRIEF_LANGUAGES.join(", ")}`
+    );
+    process.exit(1);
+  }
+  const language = languageArg;
 
   const project = await prisma.project.findUnique({ where: { key: projectKey } });
   if (!project) {

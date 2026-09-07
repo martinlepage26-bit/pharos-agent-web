@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 
@@ -76,7 +77,41 @@ export function sha256(content: string): string {
   return createHash("sha256").update(content).digest("hex");
 }
 
-export const REPO_ROOT = path.resolve(process.cwd());
+/**
+ * Reduce one path segment to [a-z0-9-]. Used for every user- or
+ * caller-supplied component of a draft filename, so that no input can
+ * introduce a separator, a "..", or anything else that survives path.join.
+ */
+export function slugSegment(
+  value: string,
+  fallback: string,
+  opts: { preserveCase?: boolean } = {}
+): string {
+  const base = opts.preserveCase ? value : value.toLowerCase();
+  return (
+    base.replace(/[^a-zA-Z0-9]+/g, "-").replace(/(^-|-$)/g, "") || fallback
+  );
+}
+
+/**
+ * Anchor the repository root to this module's location rather than to
+ * process.cwd(). With a cwd-relative root, DRAFTS_DIR and the grant's
+ * allowedPaths resolve against the same moving base, so the containment
+ * check could never fail — and drafts were in fact written outside the
+ * repository. `typeof __dirname` is safe under ESM (no ReferenceError).
+ */
+function findRepoRoot(): string {
+  let dir = typeof __dirname !== "undefined" ? __dirname : process.cwd();
+  for (let i = 0; i < 6; i++) {
+    if (existsSync(path.join(dir, "package.json"))) return dir;
+    const parent = path.dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  return path.resolve(process.cwd());
+}
+
+export const REPO_ROOT = findRepoRoot();
 export const DRAFTS_DIR = path.join(REPO_ROOT, "drafts");
 
 export async function ensureDraftsDir(): Promise<void> {
