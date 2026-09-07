@@ -111,7 +111,7 @@ if absent, `logs/`, `setup.status`, and the Postgres cluster in `pgdata/`.
 
 1. **pgvector embeddings** — column and index are prepared in `db/extensions.sql`; swap FTS ranking for hybrid semantic search.
 2. **EventKit calendar adapter** (read-only) replacing the honest stub.
-3. **GitHub read integration** once `GITHUB_TOKEN` is set. Note the scope is *not* yet enforced by the policy engine: the grant's `repositoryIds` is empty and no caller passes a `repositoryId`, so today the restriction comes from the tool's own query. Populate the grant and pass the id before relying on it.
+3. **GitHub read integration** once `GITHUB_TOKEN` is set. Registering a `github_repo` source is not sufficient: the repository's full name must also appear in the `github.read` grant's `repositoryIds`, which is checked per repository at the point of access. An empty list denies all.
 4. **Scheduled morning brief** via launchd (`~/pharos/launchd/` pattern).
 5. **Approval queue** for reversible writes (draft GitHub issues, local tasks) — never for send/publish/merge/delete.
 6. **Memory lifecycle in the UI** — the contract (§4) promises memory items are editable, expirable and deletable; today `/sources` renders them read-only and the schema has no expiry field.

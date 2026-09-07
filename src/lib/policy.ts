@@ -67,11 +67,21 @@ export async function assertCapability(
       return deny(`project "${resource.projectKey}" is outside the grant scope`);
   }
 
-  if (scope.repositoryIds?.length) {
-    if (!resource.repositoryId)
-      return deny("grant is scoped to repositories but no repository was supplied");
+  // The repository dimension is per-access, not per-call: the GitHub tool
+  // makes one project-level entry check and then one check per repository
+  // it is about to read. Demanding a repositoryId on the entry check the
+  // way the other dimensions are demanded would deny the tool outright as
+  // soon as the allowlist were populated — the exact trap this rule exists
+  // to avoid. So it is checked when, and only when, a repository is named,
+  // and every caller that touches a repository must name it.
+  //
+  // A declared-but-empty list therefore denies every repository rather
+  // than allowing all of them, which is the fail-closed reading.
+  if (scope.repositoryIds && resource.repositoryId) {
     if (!scope.repositoryIds.includes(resource.repositoryId))
-      return deny("repository is outside the grant scope");
+      return deny(
+        `repository "${resource.repositoryId}" is outside the grant scope`
+      );
   }
 
   if (scope.allowedPaths?.length) {

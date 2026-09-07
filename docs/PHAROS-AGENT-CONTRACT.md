@@ -30,7 +30,7 @@ Capabilities in v1:
 | Capability | Mode | Scope |
 |---|---|---|
 | `documents.search` | preapproved | registered sources of `pharos`, `pharos-suite` |
-| `github.read` | preapproved | explicitly registered repositories only |
+| `github.read` | preapproved | repositories named in the grant's `repositoryIds`, checked per repository at the point of access; an empty list denies all |
 | `calendar.read` | preapproved | stub until the EventKit adapter exists |
 | `drafts.write` | preapproved | `drafts/` inside this repository only |
 | `voice.speak` | preapproved | the local synthesis engine on loopback; no project, repository, or path dimension applies |

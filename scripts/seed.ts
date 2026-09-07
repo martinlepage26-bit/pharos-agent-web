@@ -71,6 +71,10 @@ async function main() {
       approvalMode: "preapproved",
     },
     {
+      // An empty allowlist denies every repository. Registering a
+      // github_repo source is not enough on its own — add its full name
+      // here too. The tool reports what it was refused rather than
+      // returning a short list that looks like "no activity".
       capability: "github.read",
       resourceScopeJson: JSON.stringify({ repositoryIds: [] }),
       approvalMode: "preapproved",
