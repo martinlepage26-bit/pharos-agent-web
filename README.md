@@ -132,6 +132,25 @@ The provisioning scripts (`setup-run.sh`, `pa-dev.sh`) also write `.env`
 if absent, `logs/`, `setup.status`, and the Postgres cluster in `pgdata/`.
 `drafts/` is the only path the *agent* writes to.
 
+## Known dependency advisories
+
+`npm audit` reports 5 vulnerabilities (4 high, 1 moderate). Both roots
+were checked as of 2026-09-07 and neither has a fix that `npm audit fix`
+can apply, despite what it says:
+
+- **deepmerge-ts <8.0.0**, via `prisma → @prisma/config`. There is no
+  Prisma version that resolves this — `@prisma/config@latest` still pins
+  `deepmerge-ts@7.1.5`. Waiting on upstream.
+- **postcss ≤8.5.22**, via `next@15.5.25`, which pins `8.4.31`. The fix
+  first appears in Next 16, a major upgrade with breaking changes; 15.5.25
+  is the newest 15.x. (The other `postcss` in the tree, `8.5.28` under
+  vitest, is already unaffected.)
+
+Both are build-time dependencies. Neither is reachable from a request to
+this localhost-only app, and neither parses untrusted input here. Revisit
+when Prisma updates, or when a Next 16 migration is worth doing on its
+own merits.
+
 ## Upgrade path
 
 1. **pgvector embeddings** — column and index are prepared in `db/extensions.sql`; swap FTS ranking for hybrid semantic search.
