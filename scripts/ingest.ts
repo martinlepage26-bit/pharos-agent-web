@@ -5,6 +5,13 @@
  *
  * Re-running is idempotent: documents are upserted by (sourceId, path)
  * and chunks are replaced when the content hash changes.
+ *
+ *   npm run ingest              incremental
+ *   npm run ingest -- --force   rebuild every chunk
+ *
+ * --force exists because an earlier version of this script advanced
+ * Document.contentHash without rebuilding the chunks, so an index can
+ * already hold stale chunk text that no incremental run will correct.
  */
 import { PrismaClient } from "@prisma/client";
 import * as fs from "node:fs/promises";
@@ -12,6 +19,8 @@ import * as path from "node:path";
 import { createHash } from "node:crypto";
 
 const prisma = new PrismaClient();
+
+const force = process.argv.includes("--force");
 
 const MAX_FILE_BYTES = 200_000;
 const SKIP_DIRS = new Set([
@@ -90,9 +99,25 @@ async function main() {
       const relPath = path.relative(source.rootPath, filePath);
       const contentHash = createHash("sha256").update(raw).digest("hex");
 
+      // Read the stored hash BEFORE the upsert. Comparing against the
+      // upsert's return value compared the new hash to itself, so the
+      // test was always false and edited documents were never re-chunked
+      // unless their chunk count happened to change.
+      const previous = await prisma.document.findUnique({
+        where: { sourceId_path: { sourceId: source.id, path: relPath } },
+        select: { contentHash: true },
+      });
+      const changed = previous?.contentHash !== contentHash;
+
       const document = await prisma.document.upsert({
         where: { sourceId_path: { sourceId: source.id, path: relPath } },
-        update: { contentHash, ingestedAt: new Date() },
+        // contentHash is deliberately NOT advanced here. It is written
+        // only after the chunks are rebuilt, below, so the stored hash
+        // always describes the content the chunks were built from. The
+        // old code advanced it unconditionally, which meant an
+        // interrupted run — or the bug above — left the row claiming a
+        // freshness the chunks did not have, and no later run could tell.
+        update: { ingestedAt: new Date() },
         create: {
           sourceId: source.id,
           path: relPath,
@@ -104,7 +129,7 @@ async function main() {
       // Replace chunks only if content changed or chunks absent
       const existing = await prisma.chunk.count({ where: { documentId: document.id } });
       const chunks = chunkMarkdown(raw);
-      if (existing !== chunks.length || document.contentHash !== contentHash) {
+      if (force || existing !== chunks.length || changed) {
         await prisma.chunk.deleteMany({ where: { documentId: document.id } });
         await prisma.chunk.createMany({
           data: chunks.map((c) => ({
@@ -113,6 +138,10 @@ async function main() {
             heading: c.heading,
             content: c.content,
           })),
+        });
+        await prisma.document.update({
+          where: { id: document.id },
+          data: { contentHash },
         });
       }
       docCount++;

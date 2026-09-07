@@ -194,6 +194,21 @@ export async function runBriefWorkflow(req: BriefRequest) {
   }
 }
 
+/**
+ * Text of a hit that the template scans for decision/risk keywords.
+ *
+ * This used to read a `content` field SearchHit did not have: the value
+ * was undefined, /decision/.test(undefined) tested the string "undefined",
+ * and sections 2 and 3 of every template brief were therefore always
+ * empty — indistinguishable from "nothing to report". SearchHit now
+ * carries the full chunk, because a quarter of chunks are longer than the
+ * 600-character excerpt. The heading is included too: a passage under
+ * "Décisions" is a decision passage even when its body never says so.
+ */
+function searchableText(hit: SearchOutput["hits"][number]): string {
+  return `${hit.heading ?? ""}\n${hit.content}`;
+}
+
 function templateBrief(
   projectName: string,
   projectKey: string,
@@ -219,7 +234,7 @@ function templateBrief(
   }
   lines.push("", "## 2. Décisions ouvertes / Open decisions");
   const decisionHits = hits.filter((h) =>
-    /decision|décision/i.test(h.content)
+    /decision|décision/i.test(searchableText(h))
   );
   if (decisionHits.length) {
     decisionHits.slice(0, 4).forEach((h, i) => {
@@ -231,7 +246,9 @@ function templateBrief(
     lines.push("- _No decision-tagged evidence retrieved._");
   }
   lines.push("", "## 3. Risques et bloqueurs / Risks and blockers");
-  const riskHits = hits.filter((h) => /risk|blocker|bloque|risque/i.test(h.content));
+  const riskHits = hits.filter((h) =>
+    /risk|blocker|bloque|risque/i.test(searchableText(h))
+  );
   if (riskHits.length) {
     riskHits.slice(0, 4).forEach((h) => {
       lines.push(
