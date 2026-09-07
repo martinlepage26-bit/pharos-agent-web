@@ -85,6 +85,31 @@ npm run brief -- --project pharos --language fr-CA
 npm run ingest -- --force       # rebuild the index from scratch
 ```
 
+## Tests
+
+```bash
+npm test                        # vitest run
+npm run test:watch
+```
+
+54 tests covering the governance invariants: draft-path containment,
+fail-closed scope checks, per-repository allowlisting, the append-only
+ledger triggers, retrieval semantics and limit clamping, ingestion
+freshness, expired-memory exclusion, and the DRAFT label on both the
+template and synthesis paths.
+
+The suite builds and drops its own database (`pharos_agent_test`) from
+migrations on every run, so it never touches `pharos_agent` — whose
+ledger is append-only and could not be cleaned up afterwards anyway. It
+runs with no model key, so nothing reaches the network; the one test that
+needs the synthesis path mocks the model.
+
+Worth knowing when adding tests: several invariants cannot be caught by a
+whole-workflow assertion, because the offline template path masks them.
+The DRAFT label is the example — the template appends it regardless, so
+only `tests/synthesisPath.test.ts` can see it go missing. Check a new
+test actually fails when you break the thing it claims to cover.
+
 ## Layout
 
 ```

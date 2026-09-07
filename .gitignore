@@ -38,3 +38,6 @@ setup.status
 
 # --- macOS noise ---
 .DS_Store
+
+# --- test artifacts ---
+coverage/

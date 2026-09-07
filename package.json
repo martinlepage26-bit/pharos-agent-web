@@ -12,7 +12,9 @@
     "db:audit-lock": "psql \"$DATABASE_URL\" -f db/audit-append-only.sql",
     "db:seed": "tsx scripts/seed.ts",
     "ingest": "tsx scripts/ingest.ts",
-    "brief": "tsx scripts/brief-cli.ts"
+    "brief": "tsx scripts/brief-cli.ts",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "prisma": {
     "seed": "tsx scripts/seed.ts"
@@ -29,6 +31,7 @@
     "@types/react-dom": "^19.1.0",
     "prisma": "^6.7.0",
     "tsx": "^4.19.4",
-    "typescript": "^5.8.3"
+    "typescript": "^5.8.3",
+    "vitest": "^3.2.7"
   }
 }

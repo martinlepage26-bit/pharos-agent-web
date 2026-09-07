@@ -30,7 +30,7 @@ export const DRAFT_LABEL = "DRAFT — human review required";
  * Guarantee the draft label in code rather than by asking the model for
  * it. Idempotent: a compliant response is left untouched.
  */
-function ensureDraftLabel(content: string): string {
+export function ensureDraftLabel(content: string): string {
   return content.includes(DRAFT_LABEL)
     ? content
     : `${content.trimEnd()}\n\n---\n${DRAFT_LABEL}\n`;
