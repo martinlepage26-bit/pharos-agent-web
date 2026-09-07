@@ -45,21 +45,20 @@ OpenRouter synthesis with deterministic template fallback.
 # 1. Install dependencies
 npm install
 
-# 2. Schema. NOTE: this instance was built with `db push`, so there is no
-#    migration history and no _prisma_migrations table. Do NOT run
-#    `prisma migrate dev` against it — Prisma will see an unmanaged
-#    database and offer to reset, which destroys the audit ledger.
-npx prisma db push --skip-generate
+# 2. Schema. Migration history was baselined on 2026-09-07 from the
+#    live cluster (0_init), plus 1_audit_append_only for the ledger
+#    triggers. On a fresh machine `migrate deploy` builds both.
+npx prisma migrate deploy
 npx prisma generate
 
-# 3. Enforce the append-only ledger at the database level
-npm run db:audit-lock
+#    On THIS machine the schema is already applied and marked. Never run
+#    `prisma migrate reset` here — it drops the audit ledger.
 
-# 4. Seed projects, sources, grants, memory — then index documents
+# 3. Seed projects, sources, grants, memory — then index documents
 npm run db:seed
 npm run ingest                  # add --force to rebuild every chunk
 
-# 5. Run
+# 4. Run
 npm run dev                     # http://127.0.0.1:3000
 ```
 
@@ -108,7 +107,7 @@ if absent, `logs/`, `setup.status`, and the Postgres cluster in `pgdata/`.
 4. **Scheduled morning brief** via launchd (`~/pharos/launchd/` pattern).
 5. **Approval queue** for reversible writes (draft GitHub issues, local tasks) — never for send/publish/merge/delete.
 6. **Memory lifecycle in the UI** — the contract (§4) promises memory items are editable, expirable and deletable; today `/sources` renders them read-only and the schema has no expiry field.
-7. **Migration history** — the schema exists only as `prisma/schema.prisma` plus the live cluster. Baseline it before the schema needs to change on another machine.
+7. **pgvector, for real** — `db/extensions.sql` is still unapplied and the `Chunk.embedding` column does not exist. If it is ever applied, add it as a migration so the two stay in step.
 
 ## Principles
 
