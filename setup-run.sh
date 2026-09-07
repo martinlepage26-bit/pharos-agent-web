@@ -17,10 +17,17 @@ fi
 sleep 2
 createdb -h /Users/pharos_ai/pharos-agent/pgsock -p 5433 pharos_agent 2>/dev/null
 
-# 2. Environment
-cat > .env <<'ENVEOF'
+# 2. Environment — write only if absent. This used to truncate .env on
+# every run, silently discarding a hand-added OPENROUTER_API_KEY or
+# GITHUB_TOKEN and sending the agent back to its offline fallback with no
+# error anywhere.
+if [ ! -f .env ]; then
+  cat > .env <<'ENVEOF'
 DATABASE_URL="postgresql://pharos_ai@localhost:5433/pharos_agent?host=/Users/pharos_ai/pharos-agent/pgsock"
 ENVEOF
+elif ! grep -q '^DATABASE_URL' .env; then
+  echo 'DATABASE_URL="postgresql://pharos_ai@localhost:5433/pharos_agent?host=/Users/pharos_ai/pharos-agent/pgsock"' >> .env
+fi
 
 # 3. Schema + Prisma client
 npx prisma db push --skip-generate 2>&1 | tail -3

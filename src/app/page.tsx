@@ -45,7 +45,11 @@ export default async function Dashboard() {
             <div className="n">{projects.length}</div>
           </div>
           <div className="vital">
-            <div className="top"><b>▸</b>INDEXED CHUNKS<span>PGVECTOR</span></div>
+            {/* Retrieval is Postgres full-text (ts_rank + ILIKE). The
+                pgvector column in db/extensions.sql is prepared but not
+                applied, so labelling this PGVECTOR overstated it in the
+                one place a reader would go to check. */}
+            <div className="top"><b>▸</b>INDEXED CHUNKS<span>FULL-TEXT</span></div>
             <div className="n">{chunkCount.toLocaleString()}</div>
           </div>
           <div className="vital">
