@@ -70,6 +70,14 @@ deterministic cited template, and nothing is sent off the machine.
 On this Mac both services run under launchd — `ca.pharos.agent` (the
 control center) and `ca.pharos.voice` (the F5-TTS engine).
 
+⚠️ `npm run build` and `next dev` share `.next/`, so building while the
+launchd dev server is up leaves it serving a half-replaced tree and pages
+start returning 500. Restart it afterwards:
+
+```bash
+launchctl kickstart -k gui/$(id -u)/ca.pharos.agent
+```
+
 ## CLI
 
 ```bash
