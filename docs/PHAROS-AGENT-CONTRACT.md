@@ -21,6 +21,10 @@ call, the engine verifies an explicit `CapabilityGrant` that is:
 - scoped to the requested resource (project keys, repository ids, allowed paths);
 - auditable: denials are recorded with a reason.
 
+Scope checks **fail closed**. If a grant declares a scope dimension, a call
+that supplies no value for that dimension is denied — an unanswered scope
+question is not a pass.
+
 Capabilities in v1:
 
 | Capability | Mode | Scope |
@@ -29,8 +33,22 @@ Capabilities in v1:
 | `github.read` | preapproved | explicitly registered repositories only |
 | `calendar.read` | preapproved | stub until the EventKit adapter exists |
 | `drafts.write` | preapproved | `drafts/` inside this repository only |
+| `voice.speak` | preapproved | the local synthesis engine on loopback; no project, repository, or path dimension applies |
 
 Anything not granted is denied by default and the denial is logged.
+
+### Revision 2026-09-07 — `voice.speak`
+
+`voice.speak` is recorded here as a **correction, not a new grant of
+authority.** The read-aloud feature shipped exercising this capability with
+no grant row, no registry entry, and no `assertCapability` call, auditing
+itself under a null run id — precisely the drift §9 forbids. It is now a
+typed tool (`speak_text`) reached through the registry, backed by a grant
+row that can be inspected and disabled like any other.
+
+Its bound: it sends text already in the agent's possession to a local
+process on `127.0.0.1`, and returns audio. It reads no new source, and
+nothing leaves the machine.
 
 ## 3. Tool rules
 

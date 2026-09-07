@@ -1,27 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { recordAudit } from "@/lib/audit";
+import { callTool } from "@/tools/registry";
+import { SpeakError, type SpeakTextOutput } from "@/tools/speakText";
+import { CapabilityDenied } from "@/lib/policy";
 
 const VOICE_BASE = process.env.PHAROS_VOICE_URL ?? "http://127.0.0.1:5434";
-
-/** Markdown → speakable plain text (so the voice never reads "# * |" aloud). */
-function stripMarkdown(md: string): string {
-  return md
-    .replace(/```[\s\S]*?```/g, " ")
-    .replace(/`([^`]+)`/g, "$1")
-    .replace(/!\[[^\]]*\]\([^)]*\)/g, " ")
-    .replace(/\[([^\]]+)\]\([^)]*\)/g, "$1")
-    .replace(/^\|[\s:|-]+\|$/gm, " ")
-    .replace(/^\|.*\|$/gm, (line) => line.replace(/\|/g, " ").replace(/\s+/g, " "))
-    .replace(/^#{1,6}\s*/gm, "")
-    .replace(/^[-*]\s+/gm, "")
-    .replace(/[*_>#]+/g, " ")
-    .replace(/-{3,}/g, " ")
-    .replace(/\n{2,}/g, ". ")
-    .replace(/\n/g, " ")
-    .replace(/\s{2,}/g, " ")
-    .trim();
-}
 
 export const dynamic = "force-dynamic";
 
@@ -97,82 +80,67 @@ export async function GET(request: NextRequest) {
 /**
  * POST {briefId} or {text} → {jobId}. Synthesis runs as a background job
  * on the local engine (long texts take minutes on this hardware); poll
- * GET /api/speak?job=<id> until it returns audio. Local synthesis
- * (F5-TTS); every call is audited like any other tool use.
+ * GET /api/speak?job=<id> until it returns audio.
+ *
+ * The route is a thin caller: authorization, the brief lookup, and the
+ * engine call all live in the speak_text tool, reached through callTool
+ * so the call produces a ToolCall row against a real run. Previously this
+ * body ran inline with no capability check and audited itself with a
+ * null runId, so it appeared on no run page.
  */
 export async function POST(request: NextRequest) {
-  let clean = "";
-  let purpose = "speak raw text (local F5-TTS)";
-  try {
-    const body = await request.json();
-    if (typeof body?.briefId === "string") {
-      const brief = await prisma.briefDraft.findUnique({
-        where: { id: body.briefId },
-        select: { content: true, language: true },
-      });
-      if (!brief) {
-        return NextResponse.json({ error: "brief not found" }, { status: 404 });
-      }
-      clean = stripMarkdown(brief.content).slice(0, 1200);
-      purpose = `speak ${brief.language} brief ${body.briefId.slice(0, 8)} (local F5-TTS)`;
-    } else if (typeof body?.text === "string" && body.text.trim()) {
-      clean = stripMarkdown(body.text).slice(0, 1200);
-    } else {
-      return NextResponse.json({ error: "text required" }, { status: 400 });
-    }
-    if (!clean) {
-      return NextResponse.json({ error: "nothing to say" }, { status: 400 });
-    }
+  const body = await request.json().catch(() => null);
+  if (!body || typeof body !== "object") {
+    return NextResponse.json({ error: "JSON body required" }, { status: 400 });
+  }
 
-    const res = await fetch(`${VOICE_BASE}/tts/async`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ text: clean }),
-      signal: AbortSignal.timeout(10000),
+  const briefId = typeof body.briefId === "string" ? body.briefId : undefined;
+  const text = typeof body.text === "string" ? body.text : undefined;
+  const purpose = briefId
+    ? `speak brief ${briefId.slice(0, 8)} (local F5-TTS)`
+    : "speak raw text (local F5-TTS)";
+
+  const run = await prisma.agentRun.create({
+    data: { goal: purpose, status: "running" },
+  });
+
+  try {
+    const out = (await callTool(
+      run.id,
+      "speak_text",
+      { briefId, text },
+      purpose
+    )) as SpeakTextOutput;
+
+    await prisma.agentRun.update({
+      where: { id: run.id },
+      data: { status: "completed", finishedAt: new Date() },
     });
-    if (!res.ok) {
-      const detail = await res.text().catch(() => "");
-      await recordAudit({
-        eventType: "tool_called",
-        actor: "agent",
-        toolName: "speak_text",
-        capability: "voice.speak",
-        outcome: "failed",
-        purpose: detail.slice(0, 200),
-      });
+    return NextResponse.json({ jobId: out.jobId, runId: run.id });
+  } catch (err) {
+    await prisma.agentRun.update({
+      where: { id: run.id },
+      data: { status: "failed", finishedAt: new Date() },
+    });
+
+    if (err instanceof CapabilityDenied) {
       return NextResponse.json(
-        { error: `voice engine returned ${res.status}`, detail: detail.slice(0, 200) },
-        { status: 502 },
+        { error: err.message, runId: run.id },
+        { status: 403 },
       );
     }
-    const { job_id } = (await res.json()) as { job_id?: string };
-    if (!job_id) {
-      return NextResponse.json({ error: "voice engine returned no job id" }, { status: 502 });
+    if (err instanceof SpeakError) {
+      return NextResponse.json(
+        { error: err.message, detail: err.detail, runId: run.id },
+        { status: err.status },
+      );
     }
-    await recordAudit({
-      eventType: "tool_called",
-      actor: "agent",
-      toolName: "speak_text",
-      capability: "voice.speak",
-      outcome: "success",
-      purpose: `${purpose} · ${clean.length} chars · job ${job_id}`,
-    });
-    return NextResponse.json({ jobId: job_id });
-  } catch (err) {
-    await recordAudit({
-      eventType: "tool_called",
-      actor: "agent",
-      toolName: "speak_text",
-      capability: "voice.speak",
-      outcome: "failed",
-      purpose: err instanceof Error ? err.message.slice(0, 200) : "voice engine unreachable",
-    }).catch(() => {});
     return NextResponse.json(
       {
-        error:
-          "voice engine offline — is LaunchAgent ca.pharos.voice running? (launchctl kickstart -k gui/$(id -u)/ca.pharos.voice)",
+        error: err instanceof Error ? err.message : "speak failed",
+        runId: run.id,
       },
-      { status: 503 },
+      { status: 500 },
     );
   }
 }

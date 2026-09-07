@@ -19,6 +19,7 @@ Jobs run one at a time (model lock); results are pruned after ~30 min.
 import base64
 import io
 import json
+import os
 import re
 import threading
 import time
@@ -29,8 +30,12 @@ import numpy as np
 import soundfile as sf
 from f5_tts.api import F5TTS
 
-HOME = "/Users/pharos_ai"
-REF_AUDIO = f"{HOME}/pharos-voice/ref.wav"
+# Resolve the reference clip relative to this file, not to a hardcoded
+# absolute path: the directory was moved into pharos-agent/ and synthesis
+# began failing with "No such file or directory" while the HTTP server
+# stayed up, so the fault surfaced only as failed jobs.
+HERE = os.path.dirname(os.path.abspath(__file__))
+REF_AUDIO = os.environ.get("PHAROS_VOICE_REF") or os.path.join(HERE, "ref.wav")
 REF_TEXT = "The voice should sound like someone trained to notice what others miss, part investigator, part physician. Calm under pressure, precise with uncertainty, and unwilling to confuse instinct with proof. It has the discipline of a medical report and the gravity of a crime scene, intimate, controlled, and quietly relentless."  # pre-transcribed from ref.wav (whisper-large-v3-turbo); avoids ffmpeg-dependent ASR at runtime
 PORT = 5434
 MAX_CHARS = 1200

@@ -87,6 +87,14 @@ async function main() {
       }),
       approvalMode: "preapproved",
     },
+    {
+      // No project/repo/path dimension applies: the tool sends text to the
+      // local engine on loopback and reads nothing beyond the brief it was
+      // handed. The grant row itself is the control — disable it to revoke.
+      capability: "voice.speak",
+      resourceScopeJson: JSON.stringify({}),
+      approvalMode: "preapproved",
+    },
   ];
 
   for (const g of grants) {
@@ -154,7 +162,9 @@ async function main() {
     }
   }
 
-  console.log("Seed complete: 2 projects, 2 local sources, 4 capability grants, memory items.");
+  console.log(
+    `Seed complete: 2 projects, 2 local sources, ${grants.length} capability grants, memory items.`
+  );
 }
 
 main()

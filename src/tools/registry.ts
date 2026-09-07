@@ -1,5 +1,6 @@
 import { prisma } from "../lib/prisma";
 import { recordAudit } from "../lib/audit";
+import { CapabilityDenied } from "../lib/policy";
 import {
   searchProjectDocuments,
   type SearchInput,
@@ -20,6 +21,7 @@ import {
   type CreateDraftInput,
   type CreateDraftOutput,
 } from "./createLocalBriefDraft";
+import { speakText, type SpeakTextInput, type SpeakTextOutput } from "./speakText";
 
 /**
  * The v1 tool registry. Every tool is typed, scoped, logged, and — apart
@@ -53,6 +55,11 @@ export const TOOL_REGISTRY = {
     run: (input: CreateDraftInput, runId?: string) =>
       createLocalBriefDraft(input, runId),
   },
+  speak_text: {
+    capability: "voice.speak" as const,
+    kind: "read" as const,
+    run: (input: SpeakTextInput, runId?: string) => speakText(input, runId),
+  },
 } as const;
 
 export type ToolName = keyof typeof TOOL_REGISTRY;
@@ -83,10 +90,9 @@ export async function callTool(
     });
     return output;
   } catch (err) {
-    const status =
-      err instanceof Error && err.message.startsWith("Capability denied")
-        ? "denied"
-        : "failed";
+    // instanceof, not a message prefix: rewording CapabilityDenied's message
+    // would otherwise silently downgrade a denial to a generic failure.
+    const status = err instanceof CapabilityDenied ? "denied" : "failed";
     if (status === "denied") {
       await recordAudit({
         runId,

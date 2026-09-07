@@ -23,6 +23,8 @@ pharos-voice/logs/
 pharos-voice/setup.log
 pharos-voice/*.wav
 !pharos-voice/ref.wav
+__pycache__/
+*.pyc
 
 # --- stale snapshots superseded by this repo (~619 MB) ---
 pharos-agent.archive-20260904/
