@@ -92,11 +92,14 @@ npm test                        # vitest run
 npm run test:watch
 ```
 
-54 tests covering the governance invariants: draft-path containment,
+61 tests covering the governance invariants: draft-path containment,
 fail-closed scope checks, per-repository allowlisting, the append-only
 ledger triggers, retrieval semantics and limit clamping, ingestion
 freshness, expired-memory exclusion, and the DRAFT label on both the
-template and synthesis paths.
+template and synthesis paths. tests/registryGating.test.ts iterates TOOL_REGISTRY itself, so a
+tool added without an assertCapability line fails the moment it is
+registered — which is how voice.speak escaped the authority model in the
+first place.
 
 The suite builds and drops its own database (`pharos_agent_test`) from
 migrations on every run, so it never touches `pharos_agent` — whose
