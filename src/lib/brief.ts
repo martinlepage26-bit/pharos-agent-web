@@ -89,11 +89,14 @@ export async function runBriefWorkflow(req: BriefRequest) {
   });
   if (!project) throw new Error(`Unknown project: ${req.projectKey}`);
 
+  // model is left unset until the brief actually exists. Stamping it at
+  // creation recorded a model the run may never have used: when synthesis
+  // failed and the deterministic template produced the brief, the run
+  // still claimed the cloud model had written it.
   const run = await prisma.agentRun.create({
     data: {
       goal: `Daily brief for ${project.key}`,
       language: req.language,
-      model: MODEL,
     },
   });
   await recordAudit({
@@ -192,13 +195,23 @@ export async function runBriefWorkflow(req: BriefRequest) {
         }\n\nRetrieved evidence:\n${sourcesBlock || "(none)"}\n\nGitHub activity: ${JSON.stringify(
           github
         )}\nCalendar: ${JSON.stringify(calendar)}\n\nProduce the brief now.`,
-        run.id
+        run.id,
+        // Named so the ledger records which documents left the machine,
+        // not merely that something did.
+        [...new Set(hits.map((h) => h.documentPath))]
       );
     }
 
+    // Record which path actually produced the brief, so a reader of the
+    // run can tell a synthesized brief from a fallback one.
+    const producedBy = content ? MODEL : "deterministic-template";
     if (!content) {
       content = templateBrief(project.name, project.key, hits, memory, github, calendar);
     }
+    await prisma.agentRun.update({
+      where: { id: run.id },
+      data: { model: producedBy },
+    });
 
     // Contract §5.1: every brief is labelled. On the synthesis path that
     // label was only ever a request in the prompt — a truncated or

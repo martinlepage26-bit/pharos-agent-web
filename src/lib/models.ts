@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { recordAudit } from "./audit";
 
 const OPENROUTER_KEY_FILE =
   process.env.PHAROS_OPENROUTER_KEY_FILE ??
@@ -27,10 +28,54 @@ export const MODEL = process.env.PHAROS_AGENT_MODEL ?? "anthropic/claude-sonnet-
 export async function synthesize(
   systemPrompt: string,
   userPrompt: string,
-  runId: string
+  runId: string,
+  /** Document paths whose excerpts are inside userPrompt. */
+  sourcePaths: string[] = []
 ): Promise<string | null> {
   const key = resolveApiKey();
   if (!key) return null;
+
+  const body = JSON.stringify({
+    model: MODEL,
+    max_tokens: 2000,
+    messages: [
+      { role: "system", content: systemPrompt },
+      { role: "user", content: userPrompt },
+    ],
+  });
+
+  // This is the only path on which anything leaves the machine, and it
+  // was the one path with no ledger entry: excerpts of the user's
+  // documents and their full paths were transmitted, a failure printed
+  // to stderr, and the run closed as run_completed/success either way.
+  // Record the egress before the request, so an attempt that never
+  // returns is still on the record.
+  //
+  // What is logged is the shape of the transfer, never its content: the
+  // endpoint, the model, the byte count, and which documents were drawn
+  // on. The key is never logged.
+  const egress = {
+    runId,
+    actor: "system" as const,
+    capability: "model.synthesis",
+    resourceRef: "openrouter.ai/api/v1/chat/completions",
+  };
+  await recordAudit({
+    ...egress,
+    eventType: "egress_attempted",
+    purpose: `model=${MODEL}; ${body.length} bytes; ${sourcePaths.length} document(s): ${sourcePaths.join(", ").slice(0, 400)}`,
+  });
+
+  const fail = async (reason: string) => {
+    console.error(`[pharos-agent] synthesis failed for run ${runId}: ${reason}`);
+    await recordAudit({
+      ...egress,
+      eventType: "egress_completed",
+      outcome: "failed",
+      purpose: reason.slice(0, 300),
+    });
+    return null;
+  };
 
   let res: Response;
   try {
@@ -40,37 +85,35 @@ export async function synthesize(
         Authorization: `Bearer ${key}`,
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({
-        model: MODEL,
-        max_tokens: 2000,
-        messages: [
-          { role: "system", content: systemPrompt },
-          { role: "user", content: userPrompt },
-        ],
-      }),
+      body,
     });
   } catch (e) {
-    console.error(
-      `[pharos-agent] synthesis network error for run ${runId}: ${
-        e instanceof Error ? e.message : "unknown"
-      } — falling back to template`
+    return fail(
+      `network error — ${e instanceof Error ? e.message : "unknown"}; falling back to template`
     );
-    return null;
   }
 
-  if (!res.ok) {
-    console.error(`[pharos-agent] OpenRouter ${res.status} for run ${runId}`);
-    return null;
-  }
+  if (!res.ok) return fail(`OpenRouter returned ${res.status}`);
+
   let data: unknown;
   try {
     data = await res.json();
   } catch {
-    return null;
+    return fail("response was not JSON");
   }
   const text = (data as { choices?: Array<{ message?: { content?: unknown } }> })
     ?.choices?.[0]?.message?.content;
-  return typeof text === "string" && text.length > 0 ? text : null;
+  if (typeof text !== "string" || text.length === 0) {
+    return fail("response contained no content");
+  }
+
+  await recordAudit({
+    ...egress,
+    eventType: "egress_completed",
+    outcome: "success",
+    purpose: `model=${MODEL}; ${body.length} bytes sent; ${text.length} chars returned`,
+  });
+  return text;
 }
 
 export function sha256(content: string): string {

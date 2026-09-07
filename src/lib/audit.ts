@@ -24,7 +24,11 @@ export async function recordAudit(event: {
     // 2026-09-07 contract revision alongside the §4 lifecycle.
     | "memory_updated"
     | "memory_expired"
-    | "memory_deleted";
+    | "memory_deleted"
+    // The only path on which anything leaves this machine. Logged as a
+    // pair so an attempt that never returns is still on the record.
+    | "egress_attempted"
+    | "egress_completed";
   actor: "user" | "agent" | "system";
   toolName?: string;
   capability?: string;

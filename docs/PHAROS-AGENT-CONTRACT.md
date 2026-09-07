@@ -114,8 +114,15 @@ Append-only `AuditEvent` records: `run_started`, `retrieval_completed`,
 `tool_called`, `draft_created`, `capability_denied`, `approval_requested`,
 `approval_granted`, `approval_denied`, `run_completed`, `run_failed`,
 `ingestion_completed`, `memory_updated`, `memory_expired`,
-`memory_deleted`. The ledger never stores plaintext secrets or full
-credentials.
+`memory_deleted`, `egress_attempted`, `egress_completed`. The ledger never
+stores plaintext secrets or full credentials.
+
+**Egress is on the record.** Cloud synthesis is the only path on which
+anything leaves this machine, and it is logged as a pair: `egress_attempted`
+before the request, naming the endpoint, the model, the byte count and every
+document path drawn on, so an attempt that never returns is still recorded;
+`egress_completed` after, with the outcome. What is logged is the shape of
+the transfer, never its content, and never the key.
 
 Append-only is enforced by the database, not only by convention in
 `src/lib/audit.ts`: `db/audit-append-only.sql` installs triggers that
@@ -130,8 +137,17 @@ update. That is what an append-only ledger means.
 - All services bind to `127.0.0.1` only.
 - No public exposure in v1. Remote access, if ever added, is read-only and
   approval-gated by default.
-- Secrets stay in environment variables or the macOS keychain — never in the
-  database or logs.
+- **Inbound is closed; outbound is not.** The boundary is not symmetric, and
+  saying "localhost only" without saying this would be misleading. When an
+  OpenRouter key is present, document excerpts and their paths are sent to
+  that API. Every such transfer is recorded (§6). With no key, nothing
+  leaves the machine and the brief falls back to the deterministic template.
+- Secrets stay in environment variables, the macOS keychain, or a key file
+  outside every indexed source root, readable only by the owner (`0600`) —
+  never in the database, the ledger, or logs. The running instance uses
+  `~/pharos/state/openrouter.key`; `state/` is in the ingestion skip list,
+  so the key is never walked into the corpus. The keychain remains the
+  preferred destination.
 
 ## 8. Quality gates
 
