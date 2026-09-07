@@ -44,7 +44,14 @@ export async function searchProjectDocuments(
 ): Promise<SearchOutput> {
   await assertCapability("documents.search", { projectKey: input.projectKey }, runId);
 
-  const limit = Math.min(Math.max(input.limit ?? 8, 1), 25);
+  // Coerce before clamping. A non-numeric limit made every arithmetic
+  // step NaN, the clamp evaluated to NaN, and the query ran without an
+  // effective limit — a caller could ask for one row and receive the
+  // whole match set.
+  const requested = Number(input.limit ?? 8);
+  const limit = Number.isFinite(requested)
+    ? Math.min(Math.max(Math.trunc(requested), 1), 25)
+    : 8;
   const term = input.query.trim();
   if (!term) return { hits: [], total: 0 };
 

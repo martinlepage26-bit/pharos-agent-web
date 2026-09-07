@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { recordAudit } from "./audit";
@@ -8,12 +8,33 @@ const OPENROUTER_KEY_FILE =
   process.env.PHAROS_OPENROUTER_KEY_FILE ??
   "/Users/pharos_ai/pharos/state/openrouter.key";
 
+/**
+ * Resolve the synthesis key, and say so when it cannot.
+ *
+ * The bare catch here swallowed everything: a permissions change, a typo
+ * in PHAROS_OPENROUTER_KEY_FILE, or `require` being undefined under an ESM
+ * bundle all produced the same silent null and the same silent drop to the
+ * template. Nothing distinguished "deliberately offline" from
+ * "misconfigured". An absent file is the ordinary case and stays quiet;
+ * anything else is now reported.
+ */
 export function resolveApiKey(): string | null {
   if (process.env.OPENROUTER_API_KEY) return process.env.OPENROUTER_API_KEY;
+  if (!existsSync(OPENROUTER_KEY_FILE)) return null;
   try {
-    const key = require("node:fs").readFileSync(OPENROUTER_KEY_FILE, "utf8").trim();
-    return key.length > 0 ? key : null;
-  } catch {
+    // readFileSync is imported statically — the previous require() call
+    // would have thrown ReferenceError in an ESM bundle, indistinguishably
+    // from the key being missing.
+    const key = readFileSync(OPENROUTER_KEY_FILE, "utf8").trim();
+    if (key.length > 0) return key;
+    console.error(`[pharos-agent] key file ${OPENROUTER_KEY_FILE} is empty`);
+    return null;
+  } catch (e) {
+    console.error(
+      `[pharos-agent] key file ${OPENROUTER_KEY_FILE} exists but could not be read: ${
+        e instanceof Error ? e.message : "unknown"
+      }`
+    );
     return null;
   }
 }

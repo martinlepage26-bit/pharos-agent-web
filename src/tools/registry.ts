@@ -92,18 +92,14 @@ export async function callTool(
   } catch (err) {
     // instanceof, not a message prefix: rewording CapabilityDenied's message
     // would otherwise silently downgrade a denial to a generic failure.
+    //
+    // No capability_denied event is written here. assertCapability already
+    // records one, and it carries the actual reason ("grant is disabled",
+    // "path is outside the grant scope") where this one only ever repeated
+    // the caller's purpose. Every denial used to produce two ledger rows
+    // saying different things. The tool's name is not lost: it is on the
+    // ToolCall row below, with status=denied.
     const status = err instanceof CapabilityDenied ? "denied" : "failed";
-    if (status === "denied") {
-      await recordAudit({
-        runId,
-        eventType: "capability_denied",
-        actor: "system",
-        toolName,
-        capability: spec.capability,
-        purpose,
-        outcome: "denied",
-      });
-    }
     await prisma.toolCall.create({
       data: {
         runId,

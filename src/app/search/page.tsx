@@ -1,5 +1,5 @@
 import { prisma } from "@/lib/prisma";
-import { searchProjectDocuments } from "@/tools/searchProjectDocuments";
+import { runSearch } from "@/lib/searchRun";
 
 export const dynamic = "force-dynamic";
 
@@ -13,11 +13,16 @@ export default async function SearchPage({
   const q = params.q?.trim() ?? "";
   const projectKey = params.project ?? projects[0]?.key ?? "";
   const active = projects.find((p) => p.key === projectKey) ?? projects[0];
-  const results = q && active ? await searchProjectDocuments({
-    projectKey: active.key,
-    query: q,
-    limit: 12,
-  }) : null;
+  const search =
+    q && active
+      ? await runSearch({
+          projectKey: active.key,
+          query: q,
+          limit: 12,
+          origin: "/search page",
+        })
+      : null;
+  const results = search?.output ?? null;
 
   return (
     <main>
@@ -44,9 +49,14 @@ export default async function SearchPage({
         </form>
       </div>
 
-      {results && (
+      {results && search && (
         <div className="card mt">
-          <h2>{results.total} result(s)</h2>
+          <h2>
+            {results.total} result(s){" "}
+            <a href={`/runs/${search.runId}`} className="badge">
+              run {search.runId.slice(0, 8)}
+            </a>
+          </h2>
           {results.hits.map((h) => (
             <div key={h.chunkId} style={{ marginBottom: 18 }}>
               <div>
