@@ -243,6 +243,22 @@ button.primary, .primary {
 button.primary:hover, .primary:hover { background: rgba(200,255,61,.06); box-shadow: 0 0 14px rgba(200,255,61,.12); }
 .excerpt { color: var(--dim); font-size: 10px; line-height: 1.6; }
 
+/* ----------------------------------------------------- curated memory */
+.mem-edit { display: flex; flex-direction: column; gap: 6px; align-items: flex-start; }
+.mem-edit textarea {
+  font: inherit; font-size: 10px; line-height: 1.55; width: 100%; resize: vertical;
+  color: var(--ink); background: var(--panel-2); border: 1px solid var(--line2); padding: 6px 8px;
+}
+.mem-edit textarea:focus { outline: 1px solid var(--accent2); outline-offset: 1px; }
+.mem-edit select { align-self: flex-start; }
+.mem-actions { display: flex; gap: 8px; margin-top: 8px; }
+.mem-edit button, .mem-actions button {
+  all: unset; cursor: pointer; font: inherit; font-size: 8.5px; letter-spacing: .2em;
+  color: var(--dim); border: 1px solid var(--line2); padding: 5px 10px; transition: .12s;
+}
+.mem-edit button:hover, .mem-actions button:hover { color: var(--accent); border-color: var(--accent); }
+.mem-actions button.danger:hover { color: var(--hot); border-color: var(--hot); background: rgba(249,115,98,.06); }
+
 @media (max-width: 1100px) {
   .hud { grid-template-columns: 1fr; }
   .hud .col.l, .hud .col.r { border: 0; border-top: 1px solid var(--line); }

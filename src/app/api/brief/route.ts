@@ -1,33 +1,6 @@
 import { NextResponse } from "next/server";
 import { runBriefWorkflow, isBriefLanguage } from "@/lib/brief";
-
-/**
- * Reject cross-site form posts.
- *
- * This route accepts application/x-www-form-urlencoded, which is a CORS
- * "simple request": no preflight, so any page the user visits could POST
- * here and start a run. Localhost-only is a network boundary, not a
- * browser one. Browsers always send Origin on POST; a missing Origin
- * means a non-browser client (curl, the CLI), which is allowed.
- */
-function isCrossSite(request: Request): boolean {
-  const site = request.headers.get("sec-fetch-site");
-  if (site === "cross-site" || site === "same-site") return true;
-
-  const origin = request.headers.get("origin");
-  if (!origin) return false;
-
-  // Compare against the Host header the browser actually addressed, not
-  // request.url — behind Next's server those can differ (localhost vs
-  // 127.0.0.1), which would reject the app's own form.
-  const host = request.headers.get("host");
-  if (!host) return false;
-  try {
-    return new URL(origin).host !== host;
-  } catch {
-    return true;
-  }
-}
+import { isCrossSite, sameOriginRedirect } from "@/lib/sameOrigin";
 
 export async function POST(request: Request) {
   if (isCrossSite(request)) {
@@ -67,7 +40,7 @@ export async function POST(request: Request) {
   try {
     const result = await runBriefWorkflow({ projectKey, language });
     return NextResponse.redirect(
-      new URL(`/briefs/${result.briefId}`, request.url),
+      sameOriginRedirect(request, `/briefs/${result.briefId}`),
       303
     );
   } catch (err) {

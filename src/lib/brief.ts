@@ -76,7 +76,16 @@ const RETRIEVAL_QUERIES = [
 export async function runBriefWorkflow(req: BriefRequest) {
   const project = await prisma.project.findUnique({
     where: { key: req.projectKey },
-    include: { sources: true, memoryItems: true },
+    include: {
+      sources: true,
+      // Expired memory is withheld from synthesis at the query, not
+      // filtered downstream, so no later code path can reintroduce it.
+      memoryItems: {
+        where: {
+          OR: [{ expiresAt: null }, { expiresAt: { gt: new Date() } }],
+        },
+      },
+    },
   });
   if (!project) throw new Error(`Unknown project: ${req.projectKey}`);
 

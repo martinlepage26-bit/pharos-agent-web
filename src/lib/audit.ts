@@ -18,7 +18,13 @@ export async function recordAudit(event: {
     | "capability_denied"
     | "run_completed"
     | "run_failed"
-    | "ingestion_completed";
+    | "ingestion_completed"
+    // Memory is curated by hand and feeds every brief, so the curation
+    // itself is an auditable act, not an invisible one. Added with the
+    // 2026-09-07 contract revision alongside the §4 lifecycle.
+    | "memory_updated"
+    | "memory_expired"
+    | "memory_deleted";
   actor: "user" | "agent" | "system";
   toolName?: string;
   capability?: string;

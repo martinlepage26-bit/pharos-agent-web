@@ -127,8 +127,13 @@ model MemoryItem {
   sourceRefs String   @default("[]") // JSON array of source references
   confidence String   @default("confirmed") // confirmed | inferred | needs_review
   sensitivity String  @default("internal")
+  // Contract §4: memory is expirable. A past expiresAt withdraws the item
+  // from synthesis without destroying it; deletion is separate and hard.
+  expiresAt  DateTime?
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
+
+  @@index([expiresAt])
 }
 
 model BriefDraft {

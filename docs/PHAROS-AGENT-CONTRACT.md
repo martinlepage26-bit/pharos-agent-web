@@ -50,6 +50,16 @@ Its bound: it sends text already in the agent's possession to a local
 process on `127.0.0.1`, and returns audio. It reads no new source, and
 nothing leaves the machine.
 
+### Revision 2026-09-07 — memory lifecycle
+
+§4 promised memory items were editable, expirable and deletable in the UI.
+Three of those four verbs did not exist: `/sources` rendered a read-only
+table and the schema had no expiry field to expire to. The lifecycle is now
+implemented, and three ledger event types are added for it —
+`memory_updated`, `memory_expired`, `memory_deleted`. This records an
+obligation the contract already carried; it grants no new authority, and
+the agent gains no capability over memory.
+
 ## 3. Tool rules
 
 1. Tools are typed functions in a registry — not free-form model output.
@@ -77,6 +87,18 @@ Every memory item is inspectable, editable, expirable, and deletable in the
 UI. A retrieved sentence is evidence; an interpretation keeps its provenance
 and confidence label.
 
+**Expiry withdraws, deletion destroys.** An item past its `expiresAt` is
+excluded from synthesis at the query, so no later code path can reintroduce
+it, but the row remains — the provenance of briefs already written stays
+readable. Deletion is permanent and is recorded in the ledger before the row
+goes, so what was removed remains knowable even though the item does not.
+
+Curation is the operator's act, not the agent's: the agent holds no
+capability that reaches memory mutation, and these routes are gated on
+same-origin rather than on a `CapabilityGrant`. They are audited all the
+same, because curated memory feeds every brief and a silent edit to it is a
+silent edit to the agent's conclusions.
+
 ## 5. Output rules
 
 1. Every brief is labelled **DRAFT — human review required.**
@@ -91,8 +113,17 @@ and confidence label.
 Append-only `AuditEvent` records: `run_started`, `retrieval_completed`,
 `tool_called`, `draft_created`, `capability_denied`, `approval_requested`,
 `approval_granted`, `approval_denied`, `run_completed`, `run_failed`,
-`ingestion_completed`. The ledger never stores plaintext secrets or full
+`ingestion_completed`, `memory_updated`, `memory_expired`,
+`memory_deleted`. The ledger never stores plaintext secrets or full
 credentials.
+
+Append-only is enforced by the database, not only by convention in
+`src/lib/audit.ts`: `db/audit-append-only.sql` installs triggers that
+reject `UPDATE`, `DELETE` and `TRUNCATE` on `AuditEvent`. Triggers rather
+than `REVOKE`, because the application connects as the database owner and
+owners bypass table privileges. A consequence worth stating: deleting an
+`AgentRun` now fails, since the `SetNull` on `AuditEvent.runId` is an
+update. That is what an append-only ledger means.
 
 ## 7. Deployment boundary
 
