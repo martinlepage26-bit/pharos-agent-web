@@ -6,22 +6,24 @@ import path from "node:path";
 import { prisma } from "../lib/prisma";
 import { assertCapability } from "../lib/policy";
 import { recordAudit } from "../lib/audit";
+import { planChunks, digestOf, type SpeechChunk } from "../lib/speechChunks";
 
 /**
- * ECHO — the one voice, the one engine.
+ * ECHO — the one voice, the one engine, rendered in pieces.
  *
- * This tool used to call a second local engine (F5-TTS on 5434) with its
- * own resampled copy of the reference clip. Both rendered the same
+ * This tool used to call a second local engine (F5-TTS) with its own
+ * resampled copy of the reference clip. Both rendered the same
  * 22.13-second recording, so the agent had been speaking in ECHO without
- * anything in the system knowing that is what it was. `pharos-say`
- * already carries a "Martin lock" (2026-09-05) pinning the PHAROS mouth
- * to echosay and refusing every fallback; nothing enforced that lock
- * outside pharos-say, and this tool walked straight past it.
+ * anything in the system knowing that is what it was. `pharos-say` had
+ * carried a "Martin lock" pinning the mouth to echosay since 2026-09-05;
+ * nothing enforced it outside that one script.
  *
- * Now there is one engine (echosay, Coqui XTTS-v2 on 8765), one
- * reference, and a checksum that makes the reference canonical: if it
- * moves or changes, this refuses to speak rather than quietly rendering
- * a different voice.
+ * Consolidating on echosay made the voice canonical and exposed its
+ * speed: a 571-character passage took 203 s on a good run and 483 s on a
+ * bad one. Text is therefore split into sentence-sized chunks, each
+ * rendered and addressed separately, so playback starts after the first
+ * chunk instead of the last. Measured: first audio 6.1x sooner, and 1.5x
+ * less total work, because small calls are cheaper per character.
  */
 const ECHOSAY_BASE = process.env.PHAROS_ECHOSAY_URL ?? "http://127.0.0.1:8765";
 
@@ -36,27 +38,20 @@ const ECHO_REFERENCE_SHA256 =
   "1367bb796d941ec4cf8d221b7e971be27ab14966394faa8e254dc6fb4c67c67c";
 
 /**
- * XTTS on this machine, measured 2026-09-07:
- *
- *   chars    40    120    300    571
- *   seconds  4.7   29.8   144.9  202.8      (571 also seen at 483)
- *   s/char   0.12  0.25   0.48   0.36
- *
- * Superlinear to about 300 characters, then flattening, and noisy enough
- * across runs to make any single figure a fiction. 0.5 s/char is a
- * deliberately pessimistic straight line through that: it over-estimates
- * short lines, which is the harmless direction, because the number is
- * only used for a progress readout and for the caller's timeout budget.
- *
- * MAX_CHARS is a time budget rather than a length preference — 600
- * characters is somewhere between three and eight minutes of rendering.
+ * A whole-utterance cap, still a time budget rather than a length
+ * preference — but with streaming it no longer governs time-to-first-
+ * sound, only total length. Raising it is a deliberate decision, not a
+ * side effect of chunking.
  */
 const MAX_CHARS = 600;
+
+/** Conservative, from the measured curve; used only for a progress hint. */
 const SECONDS_PER_CHAR = 0.5;
 
 export type SpeakTextInput = { briefId?: string; text?: string };
 export type SpeakTextOutput = {
   jobId: string;
+  chunks: Array<{ id: string; chars: number }>;
   chars: number;
   cached: boolean;
   estimatedSeconds: number;
@@ -92,11 +87,9 @@ export function stripMarkdown(md: string): string {
 }
 
 /**
- * Verify the canonical reference before every synthesis.
- *
- * The point of the lock is that ECHO cannot drift. Checking the file's
- * digest is what makes "canonical" mean something: swap the clip and the
- * agent stops speaking instead of speaking as someone else.
+ * Verify the canonical reference before every synthesis. Swap the clip
+ * and the agent stops speaking rather than speaking as someone else —
+ * a wrong voice is the one failure a listener cannot detect.
  */
 export function assertCanonicalVoice(): void {
   if (!existsSync(ECHO_REFERENCE)) {
@@ -105,9 +98,7 @@ export function assertCanonicalVoice(): void {
       `ECHO reference missing at ${ECHO_REFERENCE} — refusing to speak in another voice`
     );
   }
-  const actual = createHash("sha256")
-    .update(readFileSync(ECHO_REFERENCE))
-    .digest("hex");
+  const actual = createHash("sha256").update(readFileSync(ECHO_REFERENCE)).digest("hex");
   if (actual !== ECHO_REFERENCE_SHA256) {
     throw new SpeakError(
       503,
@@ -118,29 +109,105 @@ export function assertCanonicalVoice(): void {
 }
 
 /**
- * Where a rendered line lands. Keyed by the digest of the text, so the
- * same line is synthesised once and replayed thereafter — the same
- * economy pharos-say gets from its mp3 cache, and the only thing that
- * makes an eight-minute engine tolerable for repeated phrases.
- *
- * Deriving the path from the content also means no job state is held in
- * this process: whether a job is finished is a question about the
- * filesystem, so it survives a dev-server reload.
+ * Clips and manifests are content-addressed and live in tmp. Addressing
+ * by digest gives per-chunk caching for free — edit one sentence of a
+ * brief and only that sentence re-renders — and keeps the job stateless,
+ * so "is this chunk ready?" is a question about the filesystem and
+ * survives a dev-server reload.
  */
-function clipPath(jobId: string): string {
-  return path.join(os.tmpdir(), `pharos-echo-${jobId}.wav`);
+function clipPath(id: string): string {
+  return path.join(os.tmpdir(), `pharos-echo-${id}.wav`);
+}
+function manifestPath(jobId: string): string {
+  return path.join(os.tmpdir(), `pharos-echo-${jobId}.json`);
 }
 
-export function jobIdFor(text: string): string {
-  return createHash("sha256").update(text).digest("hex").slice(0, 16);
+export type Manifest = { jobId: string; chunks: SpeechChunk[]; createdAt: string };
+
+export function readManifest(jobId: string): Manifest | null {
+  const p = manifestPath(jobId);
+  if (!existsSync(p)) return null;
+  try {
+    return JSON.parse(readFileSync(p, "utf8")) as Manifest;
+  } catch {
+    return null;
+  }
 }
 
-export function readClip(jobId: string): { path: string; bytes: number } | null {
-  const p = clipPath(jobId);
+export function readClip(id: string): { path: string; bytes: number } | null {
+  const p = clipPath(id);
   if (!existsSync(p)) return null;
   const s = statSync(p);
   // A zero-byte file is echosay still writing; treat it as not ready.
   return s.size > 0 ? { path: p, bytes: s.size } : null;
+}
+
+export const jobIdFor = digestOf;
+
+/**
+ * Render the outstanding chunks one at a time.
+ *
+ * Strictly sequential: echosay holds a single resident XTTS model, so
+ * concurrent requests contend for it rather than overlapping. Rendering
+ * in order also means the listener is never waiting on a chunk that is
+ * queued behind a later one.
+ */
+async function renderSequentially(
+  manifest: Manifest,
+  runId: string | undefined
+): Promise<void> {
+  const started = Date.now();
+  let rendered = 0;
+
+  for (const chunk of manifest.chunks) {
+    if (readClip(chunk.id)) continue;
+    try {
+      const res = await fetch(`${ECHOSAY_BASE}/speak`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text: chunk.text, save_path: clipPath(chunk.id) }),
+        signal: AbortSignal.timeout(10 * 60_000),
+      });
+      if (!res.ok || !readClip(chunk.id)) {
+        await recordAudit({
+          runId,
+          eventType: "tool_called",
+          actor: "agent",
+          toolName: "speak_text",
+          capability: "voice.speak",
+          outcome: "failed",
+          purpose: `ECHO chunk ${chunk.id} failed (${res.status}) · job ${manifest.jobId}`,
+        });
+        return;
+      }
+      rendered++;
+    } catch (e) {
+      await recordAudit({
+        runId,
+        eventType: "tool_called",
+        actor: "agent",
+        toolName: "speak_text",
+        capability: "voice.speak",
+        outcome: "failed",
+        purpose: `echosay unreachable on chunk ${chunk.id}: ${
+          e instanceof Error ? e.message.slice(0, 120) : "unknown"
+        }`,
+      });
+      return;
+    }
+  }
+
+  await recordAudit({
+    runId,
+    eventType: "tool_called",
+    actor: "agent",
+    toolName: "speak_text",
+    capability: "voice.speak",
+    outcome: "success",
+    purpose: `ECHO rendered ${rendered}/${manifest.chunks.length} chunk(s) in ${Math.round(
+      (Date.now() - started) / 1000
+    )}s · job ${manifest.jobId}`,
+  });
 }
 
 export async function speakText(
@@ -165,58 +232,21 @@ export async function speakText(
   }
   if (!clean) throw new SpeakError(400, "nothing to say");
 
-  const jobId = jobIdFor(clean);
-  const estimatedSeconds = Math.ceil(clean.length * SECONDS_PER_CHAR);
+  const jobId = digestOf(clean);
+  const chunks = planChunks(clean);
+  const manifest: Manifest = { jobId, chunks, createdAt: new Date().toISOString() };
+  await fs.writeFile(manifestPath(jobId), JSON.stringify(manifest), "utf8");
 
-  if (readClip(jobId)) {
-    await recordAudit({
-      runId,
-      eventType: "tool_called",
-      actor: "agent",
-      toolName: "speak_text",
-      capability: "voice.speak",
-      outcome: "success",
-      purpose: `ECHO cache hit · ${clean.length} chars · job ${jobId}`,
-    });
-    return { jobId, chars: clean.length, cached: true, estimatedSeconds: 0 };
+  const outstanding = chunks.filter((c) => !readClip(c.id));
+  const cached = outstanding.length === 0;
+  const estimatedSeconds = Math.ceil(
+    outstanding.reduce((n, c) => n + c.chars, 0) * SECONDS_PER_CHAR
+  );
+
+  if (!cached) {
+    // Deliberately not awaited: the caller polls per chunk.
+    void renderSequentially(manifest, runId);
   }
-
-  // echosay is synchronous and slow, so the request is deliberately not
-  // awaited: the caller polls for the clip. Failures are reported into
-  // the ledger by the continuation rather than to the caller, who has
-  // already been handed a job id.
-  const started = Date.now();
-  void fetch(`${ECHOSAY_BASE}/speak`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ text: clean, save_path: clipPath(jobId) }),
-    signal: AbortSignal.timeout(30 * 60_000),
-  })
-    .then(async (res) => {
-      const ok = res.ok && readClip(jobId) !== null;
-      await recordAudit({
-        runId,
-        eventType: "tool_called",
-        actor: "agent",
-        toolName: "speak_text",
-        capability: "voice.speak",
-        outcome: ok ? "success" : "failed",
-        purpose: ok
-          ? `ECHO rendered ${clean.length} chars in ${Math.round((Date.now() - started) / 1000)}s · job ${jobId}`
-          : `echosay returned ${res.status} and produced no clip · job ${jobId}`,
-      });
-    })
-    .catch(async (e) => {
-      await recordAudit({
-        runId,
-        eventType: "tool_called",
-        actor: "agent",
-        toolName: "speak_text",
-        capability: "voice.speak",
-        outcome: "failed",
-        purpose: `echosay unreachable: ${e instanceof Error ? e.message.slice(0, 160) : "unknown"} · job ${jobId}`,
-      });
-    });
 
   await recordAudit({
     runId,
@@ -225,10 +255,18 @@ export async function speakText(
     toolName: "speak_text",
     capability: "voice.speak",
     outcome: "success",
-    purpose: `ECHO queued ${clean.length} chars, ~${estimatedSeconds}s · job ${jobId}`,
+    purpose: cached
+      ? `ECHO cache hit · ${chunks.length} chunk(s) · job ${jobId}`
+      : `ECHO queued ${outstanding.length}/${chunks.length} chunk(s), ~${estimatedSeconds}s · job ${jobId}`,
   });
 
-  return { jobId, chars: clean.length, cached: false, estimatedSeconds };
+  return {
+    jobId,
+    chunks: chunks.map((c) => ({ id: c.id, chars: c.chars })),
+    chars: clean.length,
+    cached,
+    estimatedSeconds,
+  };
 }
 
 export async function echosayHealthy(): Promise<boolean> {
@@ -245,4 +283,4 @@ export async function echosayHealthy(): Promise<boolean> {
 
 export { ECHOSAY_BASE, ECHO_REFERENCE, MAX_CHARS };
 export const clipFor = clipPath;
-export const removeClip = (jobId: string) => fs.rm(clipPath(jobId), { force: true });
+export const removeClip = (id: string) => fs.rm(clipPath(id), { force: true });

@@ -5,12 +5,14 @@ import { useCallback, useRef, useState } from "react";
 /**
  * Reads a brief (or raw text) aloud in ECHO.
  *
- * Synthesis is local Coqui XTTS-v2 via echosay, and it is slow — about
- * 0.85 seconds per character on this machine, so a capped 600-character
- * passage is roughly eight minutes. The button therefore reports elapsed
- * time against the server's estimate rather than showing an unqualified
- * spinner, and a line already rendered returns instantly from cache.
+ * The engine is slow enough that waiting for a whole passage is not
+ * usable, so the server splits text into sentence-sized chunks and
+ * renders them in order. This plays chunk one as soon as it exists and
+ * keeps fetching the rest while it speaks — first sound in seconds
+ * rather than minutes. A chunk already rendered replays from cache.
  */
+type Chunk = { id: string; chars: number };
+
 export default function ReadAloudButton({
   briefId,
   text,
@@ -21,21 +23,61 @@ export default function ReadAloudButton({
   label?: string;
 }) {
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  const cancelledRef = useRef(false);
   const [status, setStatus] = useState<"idle" | "loading" | "playing" | "error">("idle");
   const [error, setError] = useState<string | null>(null);
   const [progress, setProgress] = useState<string | null>(null);
 
-  const onClick = useCallback(async () => {
-    if (status === "loading") return;
-    try {
-      audioRef.current?.pause();
-      if (status === "playing") {
-        setStatus("idle");
-        return;
+  /** Wait for one chunk's audio, tolerating the 202 it returns while rendering. */
+  const fetchClip = useCallback(async (id: string, budgetMs: number): Promise<Blob> => {
+    const deadline = Date.now() + budgetMs;
+    // First attempt is immediate: a cached chunk should not cost a poll.
+    for (let first = true; Date.now() < deadline; first = false) {
+      if (!first) await new Promise((r) => setTimeout(r, 2000));
+      if (cancelledRef.current) throw new Error("cancelled");
+      const res = await fetch(`/api/speak?clip=${encodeURIComponent(id)}`, {
+        cache: "no-store",
+      });
+      if (res.ok) return res.blob();
+      if (res.status !== 202) {
+        const d = await res.json().catch(() => ({}));
+        throw new Error(d.detail || d.error || `chunk failed (${res.status})`);
       }
-      setStatus("loading");
-      setError(null);
+    }
+    throw new Error("ECHO did not finish this passage in time — try again to resume from cache");
+  }, []);
 
+  const play = useCallback((blob: Blob) => {
+    return new Promise<void>((resolve, reject) => {
+      const url = URL.createObjectURL(blob);
+      const audio = new Audio(url);
+      audioRef.current = audio;
+      audio.onended = () => {
+        URL.revokeObjectURL(url);
+        resolve();
+      };
+      audio.onerror = () => {
+        URL.revokeObjectURL(url);
+        reject(new Error("playback failed"));
+      };
+      void audio.play().catch(reject);
+    });
+  }, []);
+
+  const onClick = useCallback(async () => {
+    if (status === "loading" || status === "playing") {
+      cancelledRef.current = true;
+      audioRef.current?.pause();
+      setStatus("idle");
+      setProgress(null);
+      return;
+    }
+
+    cancelledRef.current = false;
+    setStatus("loading");
+    setError(null);
+
+    try {
       const res = await fetch("/api/speak", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -45,59 +87,41 @@ export default function ReadAloudButton({
         const detail = await res.json().catch(() => ({}));
         throw new Error(detail.error || `request failed (${res.status})`);
       }
-      const { jobId, estimatedSeconds = 0, cached = false } =
-        (await res.json()) as {
-          jobId?: string;
-          estimatedSeconds?: number;
-          cached?: boolean;
-        };
-      if (!jobId) throw new Error("no job id from voice engine");
+      const { chunks = [], estimatedSeconds = 0 } = (await res.json()) as {
+        chunks?: Chunk[];
+        estimatedSeconds?: number;
+      };
+      if (!chunks.length) throw new Error("nothing to say");
 
-      // Allow generously more than the estimate: the figure is a linear
-      // model of a real engine, not a guarantee, and timing out on a clip
-      // that is nearly finished wastes the whole render.
-      const budgetMs = Math.max(90_000, estimatedSeconds * 1000 * 3);
-      const startedAt = Date.now();
-      const deadline = startedAt + budgetMs;
-      if (!cached && estimatedSeconds > 0) setProgress(`0s / ~${estimatedSeconds}s`);
+      // Budget per chunk, generous: the estimate is a linear model of a
+      // noisy engine, and timing out on a nearly-finished chunk throws
+      // away the render.
+      const perChunkMs = Math.max(120_000, (estimatedSeconds * 1000 * 3) / chunks.length);
 
-      let audioRes: Response | null = null;
-      while (Date.now() < deadline) {
-        await new Promise((r) => setTimeout(r, 3000));
-        const poll = await fetch(`/api/speak?job=${encodeURIComponent(jobId)}`, {
-          cache: "no-store",
-        });
-        if (poll.ok) {
-          audioRes = poll;
-          break;
-        }
-        if (poll.status !== 202) {
-          const detail = await poll.json().catch(() => ({}));
-          throw new Error(detail.detail || detail.error || `synthesis failed (${poll.status})`);
-        }
-        const elapsed = Math.round((Date.now() - startedAt) / 1000);
-        if (estimatedSeconds > 0) setProgress(`${elapsed}s / ~${estimatedSeconds}s`);
+      // Fetch one chunk ahead of the one being spoken, so the next is
+      // usually in hand by the time the current finishes.
+      let ahead: Promise<Blob> | null = fetchClip(chunks[0].id, perChunkMs);
+      for (let i = 0; i < chunks.length; i++) {
+        if (cancelledRef.current) return;
+        setProgress(`${i + 1}/${chunks.length}`);
+        const current = ahead!;
+        ahead = i + 1 < chunks.length ? fetchClip(chunks[i + 1].id, perChunkMs) : null;
+
+        const blob = await current;
+        if (cancelledRef.current) return;
+        setStatus("playing");
+        await play(blob);
       }
-      if (!audioRes) {
-        throw new Error(
-          `ECHO did not finish within ${Math.round(budgetMs / 60000)} minutes — it may still be rendering; try again to pick up the cached clip`
-        );
-      }
+
       setProgress(null);
-
-      const blob = await audioRes.blob();
-      const url = URL.createObjectURL(blob);
-      const audio = new Audio(url);
-      audio.onended = () => setStatus("idle");
-      audioRef.current = audio;
-      setStatus("playing");
-      await audio.play();
+      setStatus("idle");
     } catch (err) {
+      if (cancelledRef.current) return;
       setProgress(null);
       setStatus("error");
       setError(err instanceof Error ? err.message : "playback failed");
     }
-  }, [briefId, text, status]);
+  }, [briefId, text, status, fetchClip, play]);
 
   return (
     <span>
@@ -105,15 +129,14 @@ export default function ReadAloudButton({
         type="button"
         className="badge ok"
         onClick={onClick}
-        disabled={status === "loading"}
         style={{ cursor: "pointer" }}
       >
         {status === "loading"
           ? progress
-            ? `ECHO ${progress}`
-            : "READING…"
+            ? `ECHO ${progress}…`
+            : "ECHO…"
           : status === "playing"
-            ? "STOP"
+            ? `STOP ${progress ?? ""}`.trim()
             : label}
       </button>{" "}
       {error ? <span className="badge fail">VOICE ERROR: {error}</span> : null}

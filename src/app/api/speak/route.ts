@@ -5,6 +5,7 @@ import { callTool } from "@/tools/registry";
 import {
   SpeakError,
   readClip,
+  readManifest,
   echosayHealthy,
   assertCanonicalVoice,
   ECHOSAY_BASE,
@@ -17,19 +18,19 @@ import { CapabilityDenied } from "@/lib/policy";
 export const dynamic = "force-dynamic";
 
 /**
- * GET /api/speak           → ECHO engine health and voice provenance
- * GET /api/speak?job=<id>  → 202 while rendering, 200 audio/wav when done
+ * GET /api/speak            → ECHO engine health and voice provenance
+ * GET /api/speak?job=<id>   → the chunk manifest with per-chunk readiness
+ * GET /api/speak?clip=<id>  → 202 while rendering, 200 audio/wav when done
+ *
+ * Readiness and audio are separate so a caller can start playing chunk
+ * one while the rest are still being rendered — the whole point of
+ * chunking against an engine this slow.
  */
 export async function GET(request: NextRequest) {
-  const job = request.nextUrl.searchParams.get("job");
-
-  if (job) {
-    const clip = readClip(job);
-    if (!clip) {
-      // Not an error: XTTS takes roughly 0.85s per character, so a long
-      // passage legitimately stays unfinished for several minutes.
-      return NextResponse.json({ status: "running" }, { status: 202 });
-    }
+  const clipId = request.nextUrl.searchParams.get("clip");
+  if (clipId) {
+    const clip = readClip(clipId);
+    if (!clip) return NextResponse.json({ status: "running" }, { status: 202 });
     const buf = await fs.readFile(clip.path);
     return new NextResponse(new Uint8Array(buf), {
       status: 200,
@@ -38,6 +39,24 @@ export async function GET(request: NextRequest) {
         "Content-Length": String(buf.byteLength),
         "Cache-Control": "no-store",
       },
+    });
+  }
+
+  const job = request.nextUrl.searchParams.get("job");
+  if (job) {
+    const manifest = readManifest(job);
+    if (!manifest) return NextResponse.json({ error: "unknown job" }, { status: 404 });
+    const chunks = manifest.chunks.map((c) => ({
+      id: c.id,
+      chars: c.chars,
+      ready: readClip(c.id) !== null,
+    }));
+    return NextResponse.json({
+      jobId: manifest.jobId,
+      chunks,
+      ready: chunks.filter((c) => c.ready).length,
+      total: chunks.length,
+      done: chunks.every((c) => c.ready),
     });
   }
 
@@ -105,6 +124,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({
       jobId: out.jobId,
       runId: run.id,
+      chunks: out.chunks,
       cached: out.cached,
       chars: out.chars,
       estimatedSeconds: out.estimatedSeconds,
