@@ -166,8 +166,22 @@ export function slugSegment(
  */
 function findRepoRoot(): string {
   let dir = typeof __dirname !== "undefined" ? __dirname : process.cwd();
-  for (let i = 0; i < 6; i++) {
-    if (existsSync(path.join(dir, "package.json"))) return dir;
+  // Look for *this* package, not merely any package.json. Next writes
+  // `.next/package.json` containing `{"type":"commonjs"}`, and under the
+  // server bundle __dirname sits below it — so a bare existence check
+  // stopped there and every web-triggered brief was written into
+  // .next/drafts/, which `next build` deletes. Consistent, and wrong:
+  // the same shape of bug as the process.cwd() version this replaced.
+  for (let i = 0; i < 12; i++) {
+    const pkg = path.join(dir, "package.json");
+    if (existsSync(pkg)) {
+      try {
+        const parsed = JSON.parse(readFileSync(pkg, "utf8")) as { name?: string };
+        if (parsed.name === "pharos-agent") return dir;
+      } catch {
+        // Unreadable or malformed: keep walking rather than anchor here.
+      }
+    }
     const parent = path.dirname(dir);
     if (parent === dir) break;
     dir = parent;

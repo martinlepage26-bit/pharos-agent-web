@@ -37,8 +37,21 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "invalid language" }, { status: 400 });
   }
 
+  // A browser posting the dashboard form wants to land on the brief; a
+  // program wants the ids. URLSession follows redirects by default, so a
+  // non-browser client that got the 303 would receive the HTML of the
+  // brief page and lose the id it came for.
+  const wantsJson = (request.headers.get("accept") ?? "").includes("application/json");
+
   try {
     const result = await runBriefWorkflow({ projectKey, language });
+    if (wantsJson) {
+      return NextResponse.json({
+        briefId: result.briefId,
+        runId: result.runId,
+        filePath: result.filePath,
+      });
+    }
     return NextResponse.redirect(
       sameOriginRedirect(request, `/briefs/${result.briefId}`),
       303

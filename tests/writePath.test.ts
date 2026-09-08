@@ -33,6 +33,21 @@ describe("draft write path is confined to drafts/", () => {
     expect(DRAFTS_DIR).toBe(path.join(REPO_ROOT, "drafts"));
   });
 
+  it("anchors to this package, not to any package.json above the module", async () => {
+    // Next writes `.next/package.json` = {"type":"commonjs"}, and under
+    // the server bundle the module sits below it. A bare existence check
+    // stopped there, so every web-triggered brief was written into
+    // .next/drafts/ — a directory `next build` deletes. This test runs
+    // under vitest, where the old code happened to be right, so it has
+    // to assert the discriminator itself rather than the outcome.
+    const pkg = JSON.parse(
+      await fs.readFile(path.join(REPO_ROOT, "package.json"), "utf8")
+    ) as { name?: string };
+    expect(pkg.name).toBe("pharos-agent");
+    expect(REPO_ROOT.includes(`${path.sep}.next`)).toBe(false);
+    expect(REPO_ROOT.includes("node_modules")).toBe(false);
+  });
+
   it("flattens hostile language values instead of escaping", async () => {
     // Each of these previously produced a file outside the repository.
     for (const language of [
