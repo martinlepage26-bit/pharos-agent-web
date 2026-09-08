@@ -41,3 +41,10 @@ setup.status
 
 # --- test artifacts ---
 coverage/
+
+# --- F5-TTS service, retired 2026-09-07 ---
+# ECHO is rendered by echosay (Coqui XTTS-v2) from the single canonical
+# reference at ~/.local/share/echo-voice/reference.wav. This directory
+# held a second engine and a resampled duplicate of that same 22.13s
+# recording. The files stay on disk; they are not this repo's to carry.
+pharos-voice/

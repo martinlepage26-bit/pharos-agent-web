@@ -1,92 +1,78 @@
 import { NextRequest, NextResponse } from "next/server";
+import fs from "node:fs/promises";
 import { prisma } from "@/lib/prisma";
 import { callTool } from "@/tools/registry";
-import { SpeakError, type SpeakTextOutput } from "@/tools/speakText";
+import {
+  SpeakError,
+  readClip,
+  echosayHealthy,
+  assertCanonicalVoice,
+  ECHOSAY_BASE,
+  ECHO_REFERENCE,
+  MAX_CHARS,
+  type SpeakTextOutput,
+} from "@/tools/speakText";
 import { CapabilityDenied } from "@/lib/policy";
-
-const VOICE_BASE = process.env.PHAROS_VOICE_URL ?? "http://127.0.0.1:5434";
 
 export const dynamic = "force-dynamic";
 
 /**
- * GET /api/speak           → voice engine health
- * GET /api/speak?job=<id>  → poll an engine job: 202 running, 200 audio/wav
+ * GET /api/speak           → ECHO engine health and voice provenance
+ * GET /api/speak?job=<id>  → 202 while rendering, 200 audio/wav when done
  */
 export async function GET(request: NextRequest) {
   const job = request.nextUrl.searchParams.get("job");
+
   if (job) {
-    try {
-      const res = await fetch(`${VOICE_BASE}/job/${encodeURIComponent(job)}`, {
-        cache: "no-store",
-        signal: AbortSignal.timeout(10000),
-      });
-      if (res.status === 202) {
-        return NextResponse.json({ status: "running" }, { status: 202 });
-      }
-      if (res.ok) {
-        const data = (await res.json()) as { audio?: string };
-        if (!data.audio) {
-          return NextResponse.json({ error: "missing audio" }, { status: 502 });
-        }
-        const buf = Buffer.from(data.audio, "base64");
-        return new NextResponse(new Uint8Array(buf), {
-          status: 200,
-          headers: {
-            "Content-Type": "audio/wav",
-            "Content-Length": String(buf.byteLength),
-            "Cache-Control": "no-store",
-          },
-        });
-      }
-      const detail = await res.text().catch(() => "");
-      return NextResponse.json(
-        { status: "failed", detail: detail.slice(0, 200) },
-        { status: 502 },
-      );
-    } catch (err) {
-      return NextResponse.json(
-        { error: err instanceof Error ? err.message : "voice engine unreachable" },
-        { status: 502 },
-      );
+    const clip = readClip(job);
+    if (!clip) {
+      // Not an error: XTTS takes roughly 0.85s per character, so a long
+      // passage legitimately stays unfinished for several minutes.
+      return NextResponse.json({ status: "running" }, { status: 202 });
     }
+    const buf = await fs.readFile(clip.path);
+    return new NextResponse(new Uint8Array(buf), {
+      status: 200,
+      headers: {
+        "Content-Type": "audio/wav",
+        "Content-Length": String(buf.byteLength),
+        "Cache-Control": "no-store",
+      },
+    });
   }
 
+  let voice: "canonical" | "missing" | "changed" = "canonical";
+  let voiceDetail: string | undefined;
   try {
-    const res = await fetch(`${VOICE_BASE}/health`, {
-      cache: "no-store",
-      signal: AbortSignal.timeout(5000),
-    });
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok || data.ok !== true) {
-      return NextResponse.json(
-        { ok: false, error: "voice engine unhealthy", engine: data },
-        { status: 502 },
-      );
-    }
-    return NextResponse.json({
-      ok: true,
-      engine: "F5-TTS",
-      engineUrl: VOICE_BASE,
-      model: data.model ?? null,
-    });
-  } catch (err) {
-    return NextResponse.json(
-      { ok: false, error: err instanceof Error ? err.message : "voice engine unreachable" },
-      { status: 502 },
-    );
+    assertCanonicalVoice();
+  } catch (e) {
+    voice = e instanceof SpeakError && e.message.includes("missing") ? "missing" : "changed";
+    voiceDetail = e instanceof Error ? e.message : undefined;
   }
+
+  const healthy = await echosayHealthy();
+  return NextResponse.json(
+    {
+      ok: healthy && voice === "canonical",
+      engine: "Coqui XTTS-v2 (echosay)",
+      engineUrl: ECHOSAY_BASE,
+      engineHealthy: healthy,
+      voice: "ECHO",
+      voiceState: voice,
+      voiceDetail,
+      reference: ECHO_REFERENCE,
+      maxChars: MAX_CHARS,
+      note: "Locked to the local ECHO reference. No fallback voice: if the engine is down or the reference has changed, the agent stays silent.",
+    },
+    { status: healthy && voice === "canonical" ? 200 : 503 }
+  );
 }
 
 /**
- * POST {briefId} or {text} → {jobId}. Synthesis runs as a background job
- * on the local engine (long texts take minutes on this hardware); poll
- * GET /api/speak?job=<id> until it returns audio.
- *
- * The route is a thin caller: authorization, the brief lookup, and the
- * engine call all live in the speak_text tool, reached through callTool
- * so the call produces a ToolCall row against a real run. Previously this
- * body ran inline with no capability check and audited itself with a
- * null runId, so it appeared on no run page.
+ * POST {briefId} or {text} → {jobId}. Rendering happens in the echosay
+ * process; poll GET /api/speak?job=<id> for the audio. A line already
+ * rendered comes back immediately, because clips are keyed by the digest
+ * of their text.
  */
 export async function POST(request: NextRequest) {
   const body = await request.json().catch(() => null);
@@ -97,8 +83,8 @@ export async function POST(request: NextRequest) {
   const briefId = typeof body.briefId === "string" ? body.briefId : undefined;
   const text = typeof body.text === "string" ? body.text : undefined;
   const purpose = briefId
-    ? `speak brief ${briefId.slice(0, 8)} (local F5-TTS)`
-    : "speak raw text (local F5-TTS)";
+    ? `speak brief ${briefId.slice(0, 8)} in ECHO`
+    : "speak raw text in ECHO";
 
   const run = await prisma.agentRun.create({
     data: { goal: purpose, status: "running" },
@@ -116,7 +102,13 @@ export async function POST(request: NextRequest) {
       where: { id: run.id },
       data: { status: "completed", finishedAt: new Date() },
     });
-    return NextResponse.json({ jobId: out.jobId, runId: run.id });
+    return NextResponse.json({
+      jobId: out.jobId,
+      runId: run.id,
+      cached: out.cached,
+      chars: out.chars,
+      estimatedSeconds: out.estimatedSeconds,
+    });
   } catch (err) {
     await prisma.agentRun.update({
       where: { id: run.id },
@@ -124,23 +116,17 @@ export async function POST(request: NextRequest) {
     });
 
     if (err instanceof CapabilityDenied) {
-      return NextResponse.json(
-        { error: err.message, runId: run.id },
-        { status: 403 },
-      );
+      return NextResponse.json({ error: err.message, runId: run.id }, { status: 403 });
     }
     if (err instanceof SpeakError) {
       return NextResponse.json(
         { error: err.message, detail: err.detail, runId: run.id },
-        { status: err.status },
+        { status: err.status }
       );
     }
     return NextResponse.json(
-      {
-        error: err instanceof Error ? err.message : "speak failed",
-        runId: run.id,
-      },
-      { status: 500 },
+      { error: err instanceof Error ? err.message : "speak failed", runId: run.id },
+      { status: 500 }
     );
   }
 }

@@ -27,7 +27,7 @@ Three surfaces exist that the original v1 description did not cover:
 
 - **`/graph`** — a canvas point-cloud of the vault, laid out deterministically from `~/pharos/state/graph.json` (`src/lib/graphLayout.ts`, `src/components/VaultOrb.tsx`).
 - **`/register`** — the Project Control shared register, iframed live from `~/Documents/project-control.html` under a CSP whose `connect-src` excludes the agent's own origin.
-- **Read-aloud** — `speak_text` sends brief text to a local F5-TTS engine (`pharos-voice/server.py`, loopback port 5434) and returns audio. Local inference; the reference clip never leaves the machine.
+- **Read-aloud in ECHO** — `speak_text` renders through **echosay** (Coqui XTTS-v2, loopback 8765) from the single canonical reference at `~/.local/share/echo-voice/reference.wav`, verified by digest before every synthesis. There is no fallback voice: engine down or reference altered means silence and a stated reason. Slow by nature — roughly 5s for a short line, minutes for a few hundred characters — so clips are keyed by the digest of their text and a repeated line renders once.
 
 ## Stack
 
@@ -67,8 +67,9 @@ Optional: set `OPENROUTER_API_KEY` (or rely on the PHAROS key file at
 Without them everything still works, the brief falls back to a
 deterministic cited template, and nothing is sent off the machine.
 
-On this Mac both services run under launchd — `ca.pharos.agent` (the
-control center) and `ca.pharos.voice` (the F5-TTS engine).
+On this Mac the control center runs under launchd as `ca.pharos.agent`,
+and ECHO under `com.pharos.echosay-server`. The `ca.pharos.voice` job
+(F5-TTS) is no longer used by this app and can be retired.
 
 ⚠️ `npm run build` and `next dev` share `.next/`, so building while the
 launchd dev server is up leaves it serving a half-replaced tree and pages
@@ -92,11 +93,11 @@ npm test                        # vitest run
 npm run test:watch
 ```
 
-61 tests covering the governance invariants: draft-path containment,
+68 tests covering the governance invariants: draft-path containment,
 fail-closed scope checks, per-repository allowlisting, the append-only
 ledger triggers, retrieval semantics and limit clamping, ingestion
 freshness, expired-memory exclusion, and the DRAFT label on both the
-template and synthesis paths.
+template and synthesis paths, and the ECHO voice lock.
 
 `tests/registryGating.test.ts` iterates `TOOL_REGISTRY` itself, so a tool
 added without an `assertCapability` line fails the moment it is
@@ -130,7 +131,6 @@ prisma/           schema (governance-first data model)
 db/               audit-append-only.sql (applied) · extensions.sql (pgvector,
                   prepared but not applied)
 docs/             PHAROS-AGENT-CONTRACT.md — the normative contract
-pharos-voice/     local F5-TTS engine (separate Python service, loopback 5434)
 drafts/           the only location the agent writes to (gitignored)
 ```
 

@@ -33,7 +33,7 @@ Capabilities in v1:
 | `github.read` | preapproved | repositories named in the grant's `repositoryIds`, checked per repository at the point of access; an empty list denies all |
 | `calendar.read` | preapproved | stub until the EventKit adapter exists |
 | `drafts.write` | preapproved | `drafts/` inside this repository only |
-| `voice.speak` | preapproved | the local synthesis engine on loopback; no project, repository, or path dimension applies |
+| `voice.speak` | preapproved | the local ECHO engine (echosay) on loopback, rendering only from the canonical reference; no project, repository, or path dimension applies |
 
 Anything not granted is denied by default and the denial is logged.
 
@@ -49,6 +49,36 @@ row that can be inspected and disabled like any other.
 Its bound: it sends text already in the agent's possession to a local
 process on `127.0.0.1`, and returns audio. It reads no new source, and
 nothing leaves the machine.
+
+### Revision 2026-09-07 — ECHO is one voice, and it does not drift
+
+The agent had been speaking in ECHO without knowing it. `speak_text`
+called a second local engine (F5-TTS) holding its own resampled copy of
+the same 22.13-second reference that echosay renders from — the same
+recording at 24000 Hz instead of 22050. Two engines, two files, one
+voice, and nothing in the system aware they were the same.
+
+`pharos-say` already carried a lock dated 2026-09-05 pinning the PHAROS
+mouth to echosay and refusing every fallback, including ElevenLabs and
+the system voices. That lock bound one script. This tool walked past it.
+
+The rule now holds here too:
+
+- **One engine.** `speak_text` calls echosay (Coqui XTTS-v2) on
+  `127.0.0.1:8765`. The second engine is no longer part of this
+  repository.
+- **One reference,** `~/.local/share/echo-voice/reference.wav`, verified
+  by digest before every synthesis.
+- **No substitution.** If the engine is down, or the reference is missing
+  or altered, the agent stays silent and says why. It never falls back to
+  another voice — a wrong voice is worse than no voice, because only one
+  of those is obvious to the listener.
+- Rendered clips are keyed by the digest of their text, so a repeated
+  line is synthesised once. This is an economy, not a cache of speech:
+  clips are transient and hold nothing the ledger does not already record.
+
+This is a correction and a narrowing. No new authority is granted; the
+capability can now reach strictly fewer engines than before.
 
 ### Revision 2026-09-07 — memory lifecycle
 
