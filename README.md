@@ -7,14 +7,13 @@ PHAROS Agent retrieves from registered sources, prepares a cited work brief, and
 ## Permission and brief flow
 
 ```mermaid
-flowchart TD
-  A["Tool request"] --> B["Capability and resource-scope checks"]
-  B --> C["Access denied"]
-  B --> D["Authorized tool execution"]
-  D --> E["Retrieved sources"]
-  E --> F["Cited brief saved as a draft"]
-  C --> G["Audit record"]
-  D --> G
+flowchart LR
+  A["Tool request"] --> B["Capability and scope checks"]
+  B --> C["Denied"]
+  B --> D["Authorized retrieval"]
+  D --> E["Cited draft brief"]
+  C --> F["Audit record"]
+  D --> F
 ```
 
 ## Engineering highlights
