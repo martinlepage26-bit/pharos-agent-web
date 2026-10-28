@@ -4,6 +4,19 @@ PHAROS Agent retrieves from registered sources, prepares a cited work brief, and
 
 **Stack:** Next.js, TypeScript, React, Prisma, PostgreSQL, and Vitest.
 
+## Permission and brief flow
+
+```mermaid
+flowchart TD
+  A["Tool request"] --> B["Capability and resource-scope checks"]
+  B --> C["Access denied"]
+  B --> D["Authorized tool execution"]
+  D --> E["Retrieved sources"]
+  E --> F["Cited brief saved as a draft"]
+  C --> G["Audit record"]
+  D --> G
+```
+
 ## Engineering highlights
 
 - Permissions are application data checked in code before tool execution.
